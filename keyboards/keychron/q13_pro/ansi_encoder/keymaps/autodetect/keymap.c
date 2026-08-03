@@ -18,9 +18,19 @@
 #include "../via/keymap.c"
 
 #include "dip_switch.h"
+#include "timer.h"
 #include "transport.h"
+#include "usb_device_state.h"
+
+#define USB_RECONNECT_RESET_DELAY 250
 
 static os_variant_t detected_os = OS_UNSURE;
+
+static volatile usb_configure_state_t previous_usb_state          = USB_DEVICE_STATE_NO_INIT;
+static volatile bool                  usb_was_configured          = false;
+static volatile bool                  usb_disconnect_seen         = false;
+static volatile bool                  usb_reconnect_reset_pending = false;
+static volatile fast_timer_t          usb_reconnect_configured_at = 0;
 
 static void select_base_layer(uint8_t layer) {
     if (get_highest_layer(default_layer_state) != layer) {
@@ -54,9 +64,48 @@ bool process_detected_host_os_user(os_variant_t os) {
     return true;
 }
 
+void notify_usb_device_state_change_user(struct usb_device_state usb_device_state) {
+    usb_configure_state_t current_usb_state = usb_device_state.configure_state;
+
+    if (current_usb_state == previous_usb_state) {
+        return;
+    }
+
+    previous_usb_state = current_usb_state;
+
+    if (current_usb_state == USB_DEVICE_STATE_CONFIGURED) {
+        if (usb_disconnect_seen) {
+            /* Reset only after the replacement host has configured USB. */
+            usb_disconnect_seen         = false;
+            usb_reconnect_reset_pending = true;
+            usb_reconnect_configured_at = timer_read_fast();
+        }
+        usb_was_configured = true;
+    } else if (current_usb_state <= USB_DEVICE_STATE_INIT && usb_was_configured) {
+        usb_disconnect_seen         = true;
+        usb_reconnect_reset_pending = false;
+    }
+}
+
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    if (record->event.pressed && keycode == KC_ESC && (layer_state_is(MAC_FN) || layer_state_is(WIN_FN))) {
+        /* Fn+Esc enters STM32 DFU without disconnecting USB power or data. */
+        reset_keyboard();
+        return false;
+    }
+
+    return true;
+}
+
 void matrix_scan_user(void) {
     static transport_t previous_transport = TRANSPORT_NONE;
     transport_t        current_transport  = get_transport();
+
+    if (usb_reconnect_reset_pending && usb_device_state_get_configure_state() == USB_DEVICE_STATE_CONFIGURED && timer_elapsed_fast(usb_reconnect_configured_at) >= USB_RECONNECT_RESET_DELAY) {
+        usb_reconnect_reset_pending = false;
+        soft_reset_keyboard();
+        return;
+    }
 
     if (current_transport != previous_transport) {
         previous_transport = current_transport;
