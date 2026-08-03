@@ -5,6 +5,8 @@ base layer after QMK fingerprints a USB host:
 
 - macOS and iOS use `MAC_BASE` / `MAC_FN`.
 - Windows and Linux use `WIN_BASE` / `WIN_FN`.
+- A KVM USB reinitialization triggers a short keyboard soft reset so OS
+  detection runs again without unplugging the keyboard cable.
 - An inconclusive result keeps the physical Mac/Windows switch setting.
 - Bluetooth keeps the physical switch setting because the CKBT51 module does
   not pass USB enumeration packets from the wireless host to QMK.
